@@ -125,9 +125,14 @@ fn level(x: f32) -> u8 {
 
 const FRAME: Duration = Duration::from_micros(16_667);
 
+/// In live mode the keyboard turns all LEDs off if it gets no frame for about a
+/// second, so an unchanged frame is still re-sent this often.
+const KEEPALIVE: Duration = Duration::from_millis(300);
+
 struct Loop {
     applied: Applied,
     last_custom: Instant,
+    last_live: Instant,
 }
 
 impl Loop {
@@ -172,9 +177,10 @@ impl Loop {
                     k.start_live()?;
                     self.applied = Applied::Live(None);
                 }
-                if self.applied != Applied::Live(Some(f.clone())) {
+                if self.applied != Applied::Live(Some(f.clone())) || self.last_live.elapsed() >= KEEPALIVE {
                     k.send_live(&f)?;
                     self.applied = Applied::Live(Some(f));
+                    self.last_live = Instant::now();
                 }
                 Ok(FRAME)
             }
@@ -204,7 +210,11 @@ pub fn run(shared: Arc<Shared>, keys: Receiver<u16>) {
     let mut seen = u64::MAX;
     let mut cfg = Config::default();
     let mut r = Renderer::new();
-    let mut lp = Loop { applied: Applied::Nothing, last_custom: Instant::now() - Duration::from_secs(5) };
+    let mut lp = Loop {
+        applied: Applied::Nothing,
+        last_custom: Instant::now() - Duration::from_secs(5),
+        last_live: Instant::now(),
+    };
     let mut audio: Option<AudioCapture> = None;
     let mut audio_retry = Instant::now();
     let mut next_frame = Instant::now();

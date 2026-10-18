@@ -603,7 +603,9 @@ impl Effect for AudioBars {
                 1 => color::hsv(k.u() * 0.85, 1.0, 1.0),
                 _ => col,
             };
-            *o = color::add(color::scale(cc, lit), color::scale(cc, 0.03));
+            // faint base glow only while something is playing
+            let base = 0.03 * (c.audio.level * 20.0).min(1.0);
+            *o = color::add(color::scale(cc, lit), color::scale(cc, base));
         }
     }
 }
@@ -648,7 +650,8 @@ impl Effect for AudioScroll {
         for (o, k) in out.iter_mut().zip(KEYS) {
             let off = (k.cx() - CENTER.0).abs() as usize;
             let amp = self.hist[off.min(cols - 1)];
-            let lit = (amp * 3.6 - (k.cy() - CENTER.1).abs() + 0.5).clamp(0.0, 1.0);
+            // fade fully out at silence (no leftover glow on the middle rows)
+            let lit = (amp * 3.6 - (k.cy() - CENTER.1).abs() + 0.5).clamp(0.0, 1.0) * (amp * 12.0).min(1.0);
             let cc = if rainbow { color::hsv(0.33 - amp * 0.33, 1.0, 1.0) } else { col };
             *o = color::scale(cc, lit);
         }
@@ -800,7 +803,7 @@ static EFFECTS: &[EffectInfo] = &[
     soft!("reactive", "Key Glow", "Reactive", Reactive, &[
         p("color", "Glow color", Kind::Color([255, 255, 255])),
         p("rainbow", "Random colors", Kind::Bool(false)),
-        p("color2", "Background", Kind::Color([0, 10, 30])),
+        BG_BLACK,
         SPEED,
     ], "Keys light up when pressed and fade out.", true, false, never),
     soft!("crosshair", "Crosshair", "Reactive", Crosshair, &[

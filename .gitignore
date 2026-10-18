@@ -1,0 +1,12 @@
+/target/
+__pycache__/
+*.tmp
+
+# Personal files kept out of the public repo:
+# USB captures (they also record other devices on the same USB hub) and photos/screenshots.
+*.pcapng
+/*.jpg
+/*.jpeg
+/*.png
+
+desktop.ini

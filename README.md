@@ -2,14 +2,16 @@
 
 Lightweight custom RGB lighting for the **Surmen V400** keyboard (75% layout with a knob, USB ID `320F:505B`). It replaces the vendor app.
 
-- **45+ effects:** rainbow wave, plasma, northern lights, fire, ocean, matrix rain, starry night, galaxy, kaleidoscope, day & night sky, rainfall, snowfall, candlelight, neon sign, DNA helix, bubbles, glitch, heartbeat, scanner, fireworks, lava lamp, lightning storm, comets, and more
-- **Games that play themselves:** Snake, Pong and Conway's Game of Life on your keys
+- **55+ effects:** rainbow wave, plasma, northern lights, fire, ocean, matrix rain, starry night, galaxy, kaleidoscope, day & night sky, rainfall, snowfall, candlelight, neon sign, DNA helix, bubbles, glitch, heartbeat, scanner, fireworks, lava lamp, lightning storm, comets, warp speed, radar, night traffic, interference, a clock, and more
+- **Random designs:** *Dream* makes up a brand-new design from random patterns and colors (never the same twice), *Shuffle* plays a different random effect every so often, and **Surprise me** picks a random look in one click
+- **Fn shortcuts and a roster:** build a playlist of profiles, themes and effects, then press **`Fn + \`** to step through it (shuffle and auto-switch optional). Record your own Fn combos for next, previous, surprise, brightness or lights on/off
+- **Games that play themselves:** Snake, Pong, Tetris (sideways), Pac-Man and Conway's Game of Life on your keys
 - **Reactive effects:** ripple, key glow, crosshair, sparks, burning keys, and a typing heatmap that remembers your typing across restarts
 - **Audio effects:** equalizer bars, bass pulse, sound wave, beat ripples, sound fire and sound rings driven by whatever your PC is playing
 - **Screen Grid:** every key shows the color of its part of your screen, like a tiny live copy of it
 - **Custom keys:** paint each key yourself by clicking it in the preview
 - **All 18 built-in keyboard effects**, with brightness, speed and color controls
-- **55+ themes** with live previews, applied with one click, plus profiles you can switch from the tray
+- **65+ themes** with live previews, applied with one click, plus profiles you can switch from the tray
 - Runs quietly in the **system tray** and can start with Windows
 
 ## Light on resources
@@ -34,7 +36,7 @@ The service also avoids work it doesn't need to do:
 3. Close the vendor "SURMENV400" app (the window offers to do it), because both apps fight over the lights.
 4. Optional: tick **Start with Windows**.
 
-Closing the window keeps the lighting running. Right-click the tray icon to switch profiles, pause or quit.
+Closing the window keeps the lighting running. Right-click the tray icon to switch profiles, go to the next look, get a surprise, pause or quit.
 
 ## Build
 
@@ -57,6 +59,8 @@ The lighting protocol was reverse engineered from USB captures of the vendor app
 
 In short: 64-byte HID output reports (ID 4) go to the keyboard's vendor interface (usage page `0xFF1C`). Each has a simple checksum, and the keyboard echoes every packet back. Command `0x06` picks an effect, `0x0B` stores per-key colors, and `0x12` streams live per-key frames.
 
+Windows never sees the Fn key, but the keyboard reports Fn combos on its media-key interface (usage page `0x0C`): `03 <LED slot> 05/06` for key down/up while Fn is held, and always `03 01 04` for `Fn + \` (the key reports for that combo are unreliable). `src/fnkeys.rs` listens there.
+
 ## Project layout
 
 ```
@@ -65,6 +69,8 @@ src/
   daemon.rs      tray icon, settings file watcher, keyboard hook
   engine.rs      renders effects and decides what to send
   effects.rs     all effects and their settings
+  effects/extra.rs  random designs (Dream, Shuffle), more effects, Tetris, Pac-Man
+  fnkeys.rs      Fn + key shortcuts
   screen.rs      tiny live copy of the screen for Screen Grid
   protocol.rs    USB/HID protocol
   audio.rs       system audio capture + frequency bands

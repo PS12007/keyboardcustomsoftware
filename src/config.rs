@@ -1,6 +1,8 @@
 //! Settings and profiles, stored as JSON in %APPDATA%\KeyboardCustomSoftware\config.json.
 //! The settings window writes this file; the background service watches it.
 
+use crate::color::Rng;
+use crate::effects;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
@@ -36,6 +38,57 @@ pub struct Config {
     /// What the keyboard shows after the service stops: "keep", "off" or an onboard effect id.
     #[serde(default = "default_exit")]
     pub exit_mode: String,
+    /// A look picked by the roster or "Surprise me". Shown instead of the active
+    /// profile until a profile is picked again. Edits go to it too.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live: Option<Profile>,
+    #[serde(default)]
+    pub roster: Roster,
+    /// Fn + key shortcuts
+    #[serde(default = "default_hotkeys")]
+    pub hotkeys: Vec<Hotkey>,
+}
+
+/// The list of looks Fn+\ steps through.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Default)]
+pub struct Roster {
+    /// "p:<profile name>", "t:<theme name>", "e:<effect id>" or "surprise".
+    /// Empty = step through all profiles.
+    #[serde(default)]
+    pub items: Vec<String>,
+    #[serde(default)]
+    pub pos: usize,
+    #[serde(default)]
+    pub shuffle: bool,
+    /// switch on its own every this many minutes (0 = never)
+    #[serde(default)]
+    pub auto_minutes: u32,
+}
+
+#[derive(Serialize, Deserialize, Clone, PartialEq)]
+pub struct Hotkey {
+    /// key id from the layout, pressed together with Fn
+    pub key: String,
+    pub action: String,
+}
+
+/// (id, label) of everything a shortcut can do.
+pub const ACTIONS: &[(&str, &str)] = &[
+    ("next", "Next in roster"),
+    ("prev", "Previous in roster"),
+    ("surprise", "Surprise me (random look)"),
+    ("next_profile", "Next profile"),
+    ("pause", "Lights on / off"),
+    ("bright_up", "Brighter"),
+    ("bright_down", "Dimmer"),
+];
+
+pub fn action_label(id: &str) -> &'static str {
+    ACTIONS.iter().find(|a| a.0 == id).map(|a| a.1).unwrap_or("Nothing")
+}
+
+fn default_hotkeys() -> Vec<Hotkey> {
+    vec![Hotkey { key: "backslash".into(), action: "next".into() }]
 }
 
 fn default_exit() -> String {
@@ -66,6 +119,18 @@ impl Profile {
         if !p.keycolors.is_empty() {
             self.keycolors = p.keycolors.iter().map(|(k, c)| (k.to_string(), c.to_string())).collect();
         }
+        self.ensure_seed();
+    }
+
+    /// Random-design effects need a stored seed so the window preview and the
+    /// keyboard show the same design.
+    pub fn ensure_seed(&mut self) {
+        if effects::needs_seed(&self.effect) {
+            let m = self.params.entry(self.effect.clone()).or_default();
+            if !m.contains_key("seed") {
+                m.insert("seed".into(), effects::new_seed().into());
+            }
+        }
     }
 }
 
@@ -85,23 +150,186 @@ impl Default for Config {
             }
             profiles.push(p);
         }
-        Config { profiles, active: 0, paused: false, exit_mode: default_exit() }
+        Config {
+            profiles,
+            active: 0,
+            paused: false,
+            exit_mode: default_exit(),
+            live: None,
+            roster: Roster::default(),
+            hotkeys: default_hotkeys(),
+        }
     }
 }
 
 impl Config {
+    /// What's showing right now: the roster/surprise look, or the active profile.
     pub fn profile(&self) -> &Profile {
-        &self.profiles[self.active.min(self.profiles.len() - 1)]
+        match &self.live {
+            Some(l) => l,
+            None => &self.profiles[self.active.min(self.profiles.len() - 1)],
+        }
     }
     pub fn profile_mut(&mut self) -> &mut Profile {
         let i = self.active.min(self.profiles.len() - 1);
-        &mut self.profiles[i]
+        match self.live.as_mut() {
+            Some(l) => l,
+            None => &mut self.profiles[i],
+        }
+    }
+    /// Switch to a saved profile (drops any roster/surprise look).
+    pub fn select(&mut self, i: usize) {
+        self.active = i.min(self.profiles.len() - 1);
+        self.live = None;
     }
     fn fix(&mut self) {
         if self.profiles.is_empty() {
             *self = Config::default();
         }
         self.active = self.active.min(self.profiles.len() - 1);
+    }
+
+    /// Show a random look ("Surprise me").
+    pub fn surprise(&mut self, rng: &mut Rng) {
+        let brightness = self.profile().brightness;
+        let mut p = if rng.f() < 0.2 {
+            // sometimes one of the themes
+            let all = presets();
+            let pr = &all[rng.pick(all.len())];
+            let mut p = Profile::new(&format!("Surprise: {}", pr.name), pr.effect);
+            p.apply_preset(pr);
+            p
+        } else {
+            let (id, params) = effects::random_look(rng);
+            let mut p = Profile::new(&format!("Surprise: {}", effects::find(id).name), id);
+            p.params.insert(id.into(), params);
+            p
+        };
+        p.brightness = brightness;
+        self.live = Some(p);
+    }
+
+    /// Show one roster entry. Returns false if it no longer exists.
+    pub fn show_item(&mut self, item: &str, rng: &mut Rng) -> bool {
+        let brightness = self.profile().brightness;
+        if item == "surprise" {
+            self.surprise(rng);
+            return true;
+        }
+        if let Some(name) = item.strip_prefix("p:") {
+            if let Some(i) = self.profiles.iter().position(|p| p.name == name) {
+                self.select(i);
+                return true;
+            }
+        } else if let Some(name) = item.strip_prefix("t:") {
+            if let Some(pr) = presets().iter().find(|p| p.name == name) {
+                let mut p = Profile::new(pr.name, pr.effect);
+                p.apply_preset(pr);
+                p.brightness = brightness;
+                self.live = Some(p);
+                return true;
+            }
+        } else if let Some(id) = item.strip_prefix("e:") {
+            let info = effects::find(id);
+            if info.id == id {
+                let mut p = Profile::new(info.name, id);
+                // use the settings the active profile has for this effect, if any
+                p.params = self.profiles[self.active].params.clone();
+                if effects::needs_seed(id) {
+                    p.params.entry(id.to_string()).or_default().insert("seed".into(), effects::new_seed().into());
+                }
+                p.brightness = brightness;
+                self.live = Some(p);
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Step through the roster (dir = +1 / -1). With an empty roster, steps through profiles.
+    pub fn step_roster(&mut self, dir: i32, rng: &mut Rng) {
+        let n = self.roster.items.len();
+        if n == 0 {
+            if self.live.is_some() {
+                // first press just goes back to the profile
+                self.select(self.active);
+            } else {
+                let m = self.profiles.len() as i32;
+                self.select((self.active as i32 + dir).rem_euclid(m) as usize);
+            }
+            return;
+        }
+        let step = if dir < 0 { -1 } else { 1 };
+        let mut pos = if self.roster.shuffle && n > 1 {
+            // anything but the current one
+            (self.roster.pos + 1 + rng.pick(n - 1)) % n
+        } else {
+            (self.roster.pos as i32 + step).rem_euclid(n as i32) as usize
+        };
+        // skip entries whose profile or theme was deleted
+        for _ in 0..n {
+            let item = self.roster.items[pos].clone();
+            if self.show_item(&item, rng) {
+                break;
+            }
+            pos = (pos as i32 + step).rem_euclid(n as i32) as usize;
+        }
+        self.roster.pos = pos;
+    }
+
+    /// Run a shortcut action. Returns true if something changed.
+    pub fn run_action(&mut self, action: &str, rng: &mut Rng) -> bool {
+        match action {
+            "next" => self.step_roster(1, rng),
+            "prev" => self.step_roster(-1, rng),
+            "surprise" => self.surprise(rng),
+            "next_profile" => {
+                let i = if self.live.is_some() { self.active } else { (self.active + 1) % self.profiles.len() };
+                self.select(i);
+            }
+            "pause" => self.paused = !self.paused,
+            "bright_up" | "bright_down" => {
+                let d = if action == "bright_up" { 0.2 } else { -0.2 };
+                let p = self.profile_mut();
+                p.brightness = (((p.brightness + d) * 5.0).round() / 5.0).clamp(0.0, 1.0);
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    /// Turn the current roster/surprise look into a saved profile.
+    pub fn keep_live(&mut self) {
+        if let Some(mut p) = self.live.take() {
+            if let Some(rest) = p.name.strip_prefix("Surprise: ") {
+                p.name = rest.to_string();
+            }
+            self.profiles.push(p);
+            self.active = self.profiles.len() - 1;
+        }
+    }
+}
+
+/// Human-readable name for a roster entry.
+pub fn item_label(item: &str) -> String {
+    if item == "surprise" {
+        "Surprise me".into()
+    } else if let Some(n) = item.strip_prefix("p:").or_else(|| item.strip_prefix("t:")) {
+        n.into()
+    } else if let Some(id) = item.strip_prefix("e:") {
+        effects::find(id).name.into()
+    } else {
+        item.into()
+    }
+}
+
+/// What kind of roster entry this is (small grey label).
+pub fn item_kind(item: &str) -> &'static str {
+    match item.split(':').next().unwrap_or("") {
+        "p" => "Profile",
+        "t" => "Theme",
+        "e" => "Effect",
+        _ => "Random every time",
     }
 }
 
@@ -208,6 +436,16 @@ pub fn presets() -> Vec<Preset> {
         pr("Hot Keys", "embers", json!({"idle": 0.3, "speed": 0.5}), ["#000000", "#ff1400", "#ffd228"]),
         pr("Concert", "audio_fire", json!({"sensitivity": 0.45}), ["#5a0000", "#ff7800", "#ffffc8"]),
         pr("Subwoofer", "audio_rings", json!({"rainbow": true, "sensitivity": 0.45}), ["#00e6ff", "#ff00c8", "#ffff00"]),
+        pr("Daydream", "dream", json!({"change": "Every 2 min", "speed": 0.45}), ["#ff6ad5", "#8c1eff", "#00e5ff"]),
+        pr("Channel Surfing", "shuffle", json!({"every": "Every minute"}), ["#ff0000", "#00ff00", "#0000ff"]),
+        pr("Confetti Party", "confetti", json!({"rainbow": true, "density": 0.6, "speed": 0.5}), ["#ff2080", "#ffe000", "#00d0ff"]),
+        pr("Hyperspace", "warp", json!({"density": 0.5, "trail": 0.6, "speed": 0.5}), ["#000006", "#5070ff", "#dcebff"]),
+        pr("Sonar", "radar", json!({"speed": 0.4}), ["#000803", "#00ff5a", "#ffffff"]),
+        pr("Moire", "interference", json!({"palette": "Vaporwave", "speed": 0.35}), ["#ff3cc8", "#9600ff", "#00c8ff"]),
+        pr("Night Highway", "traffic", json!({"density": 0.5, "speed": 0.5}), ["#020206", "#fff0c8", "#ff0000"]),
+        pr("Desk Clock", "clock", json!({}), ["#ffa028", "#00c8ff", "#ffffff"]),
+        pr("Falling Blocks", "tetris", json!({"speed": 0.5}), ["#00e6ff", "#ffd900", "#a600ff"]),
+        pr("Arcade Night", "pacman", json!({"speed": 0.45}), ["#00000c", "#ffdc00", "#ff0000"]),
         pr("Police", "police", json!({"speed": 0.5}), ["#ff0000", "#000000", "#0028ff"]),
         pr("Lavender Breath", "breathing", json!({"color": "#b388ff", "speed": 0.4}), ["#1a0f2a", "#7a50c0", "#b388ff"]),
         pr("Focus", "solid", json!({"color": "#ffcf9e"}), ["#ffcf9e", "#ffe2c4", "#fff4e8"]),
@@ -220,4 +458,45 @@ pub fn presets() -> Vec<Preset> {
             keycolors: wasd,
         },
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn roster_steps_and_skips_missing() {
+        let mut rng = Rng::seeded(7);
+        let mut c = Config::default();
+        c.roster.items = vec!["p:Chill".into(), "p:Gone".into(), "t:Sonar".into(), "surprise".into(), "e:dream".into()];
+        c.roster.pos = c.roster.items.len() - 1;
+        c.step_roster(1, &mut rng);
+        assert_eq!(c.roster.pos, 0);
+        assert!(c.live.is_none());
+        assert_eq!(c.profile().name, "Chill");
+        c.step_roster(1, &mut rng); // "p:Gone" is skipped
+        assert_eq!(c.roster.pos, 2);
+        assert_eq!(c.profile().effect, "radar");
+        c.step_roster(1, &mut rng);
+        assert!(c.profile().name.starts_with("Surprise: "));
+        c.step_roster(1, &mut rng);
+        assert_eq!(c.profile().effect, "dream");
+        assert!(c.profile().params["dream"].contains_key("seed"));
+        c.step_roster(-1, &mut rng);
+        assert_eq!(c.roster.pos, 3);
+        // editing a roster look doesn't touch the saved profiles
+        let before = c.profiles.clone();
+        c.run_action("bright_down", &mut rng);
+        assert!(c.profiles == before);
+        c.keep_live();
+        assert_eq!(c.profiles.len(), before.len() + 1);
+        assert!(c.live.is_none());
+    }
+
+    #[test]
+    fn every_theme_effect_exists() {
+        for p in presets() {
+            assert_eq!(effects::find(p.effect).id, p.effect, "theme {} uses a missing effect", p.name);
+        }
+    }
 }

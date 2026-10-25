@@ -4,7 +4,9 @@
 use crate::audio::AudioCapture;
 use crate::color::{self, Rgb};
 use crate::config::{self, Config, Preset, Profile};
+use crate::color::Rng;
 use crate::daemon;
+use crate::fnkeys;
 use crate::effects::{self, AudioFrame, Ctx, Effect, EffectInfo, Kind, Mode, Params, CATEGORIES};
 use crate::engine::Renderer;
 use crate::icon;
@@ -63,6 +65,15 @@ enum Tab {
     Effects,
     Customize,
     Themes,
+    Roster,
+    Shortcuts,
+}
+
+/// Waiting for the user to press Fn + a key (shortcut index to change, or None = new).
+struct Recording {
+    slot: Option<usize>,
+    _listener: fnkeys::Listener,
+    rx: std::sync::mpsc::Receiver<&'static str>,
 }
 
 struct Status {
@@ -145,6 +156,8 @@ struct App {
     start: Instant,
     fake_audio: AudioFrame,
     fake_screen: Vec<Rgb>,
+    rng: Rng,
+    recording: Option<Recording>,
 }
 
 impl App {
@@ -177,6 +190,8 @@ impl App {
             start: Instant::now(),
             fake_audio: AudioFrame::default(),
             fake_screen: Vec::new(),
+            rng: Rng::default(),
+            recording: None,
         };
         app.refresh_status();
         app
@@ -280,7 +295,34 @@ impl App {
                 ui.label(caption_text("Custom Software"));
             });
         });
-        ui.add_space(26.0);
+        ui.add_space(22.0);
+        let hint = shortcut_for(&self.cfg, "surprise");
+        let surprise = ui.add_sized([ui.available_width(), 34.0], egui::Button::new(RichText::new("Surprise me").family(semi())));
+        if surprise.on_hover_text(format!("A random effect with random colors, different every time.{hint}")).clicked() {
+            self.cfg.surprise(&mut self.rng);
+            self.changed();
+        }
+        if let Some(live) = &self.cfg.live {
+            ui.add_space(14.0);
+            ui.label(caption_text("Now showing"));
+            ui.add_space(6.0);
+            let name = live.name.clone();
+            let effect = effects::find(&live.effect).name;
+            profile_row(ui, &name, effect, true);
+            ui.horizontal(|ui| {
+                if ui.button("Keep as profile").on_hover_text("Save this look as a new profile").clicked() {
+                    self.cfg.keep_live();
+                    self.changed();
+                }
+                let back = format!("Back to {}", self.cfg.profiles[self.cfg.active].name);
+                if ui.button(back).clicked() {
+                    let a = self.cfg.active;
+                    self.cfg.select(a);
+                    self.changed();
+                }
+            });
+        }
+        ui.add_space(22.0);
         ui.label(caption_text("Profiles"));
         ui.add_space(6.0);
 
@@ -296,7 +338,7 @@ impl App {
                     continue;
                 }
             }
-            let active = i == self.cfg.active;
+            let active = i == self.cfg.active && self.cfg.live.is_none();
             let name = self.cfg.profiles[i].name.clone();
             let effect = effects::find(&self.cfg.profiles[i].effect).name;
             let resp = profile_row(ui, &name, effect, active);
@@ -342,12 +384,17 @@ impl App {
 
         if let Some((what, i)) = action {
             match what {
-                "select" => self.cfg.active = i,
+                "select" => self.cfg.select(i),
                 "rename" => self.renaming = Some((i, self.cfg.profiles[i].name.clone())),
                 "rename_done" => {
                     if let Some((_, name)) = self.renaming.take() {
                         let name = name.trim();
                         if !name.is_empty() {
+                            // keep roster entries pointing at this profile
+                            let (old, new) = (format!("p:{}", self.cfg.profiles[i].name), format!("p:{name}"));
+                            for it in self.cfg.roster.items.iter_mut().filter(|it| **it == old) {
+                                *it = new.clone();
+                            }
                             self.cfg.profiles[i].name = name.to_string();
                         }
                     }
@@ -355,13 +402,13 @@ impl App {
                 "new" => {
                     let n = self.cfg.profiles.len() + 1;
                     self.cfg.profiles.push(Profile::new(&format!("Profile {n}"), "rainbow"));
-                    self.cfg.active = self.cfg.profiles.len() - 1;
+                    self.cfg.select(self.cfg.profiles.len() - 1);
                 }
                 "dup" => {
                     let mut p = self.cfg.profiles[i].clone();
                     p.name = format!("{} copy", p.name);
                     self.cfg.profiles.insert(i + 1, p);
-                    self.cfg.active = i + 1;
+                    self.cfg.select(i + 1);
                 }
                 "up" if i > 0 => {
                     self.cfg.profiles.swap(i, i - 1);
@@ -548,6 +595,7 @@ impl App {
         let shown: Vec<&str> = if self.gallery_cat == 0 { CATEGORIES.to_vec() } else { vec![cats[self.gallery_cat]] };
         let (cols, w) = grid_dims(ui.available_width(), 230.0);
         let mut picked = None;
+        let mut to_roster = None;
         for cat in shown {
             if self.gallery_cat == 0 {
                 ui.label(caption_text(cat));
@@ -579,7 +627,13 @@ impl App {
                         if resp.clicked() {
                             picked = Some(e.id);
                         }
-                        resp.on_hover_text(e.desc);
+                        resp.context_menu(|ui| {
+                            if ui.button("Add to roster").clicked() {
+                                to_roster = Some(format!("e:{}", e.id));
+                                ui.close();
+                            }
+                        });
+                        resp.on_hover_text(format!("{}\n\nRight-click to add it to your roster.", e.desc));
                     }
                 });
                 ui.add_space(14.0);
@@ -588,9 +642,15 @@ impl App {
         }
         if let Some(id) = picked {
             if id != current {
-                self.cfg.profile_mut().effect = id.to_string();
+                let p = self.cfg.profile_mut();
+                p.effect = id.to_string();
+                p.ensure_seed();
                 self.changed();
             }
+        }
+        if let Some(item) = to_roster {
+            self.cfg.roster.items.push(item);
+            self.changed();
         }
     }
 
@@ -618,7 +678,9 @@ impl App {
                     }
                 });
             if chosen != profile_effect {
-                self.cfg.profile_mut().effect = chosen;
+                let p = self.cfg.profile_mut();
+                p.effect = chosen;
+                p.ensure_seed();
                 self.changed();
                 return;
             }
@@ -690,6 +752,16 @@ impl App {
                     self.changed();
                 }
             });
+            if effects::needs_seed(&profile_effect) {
+                ui.add_space(12.0);
+                let label = if profile_effect == "dream" { "New design" } else { "Reshuffle" };
+                if ui.button(label).on_hover_text("Roll the dice for a different random design").clicked() {
+                    let mut map = self.cfg.profile().params_for(&profile_effect);
+                    map.insert("seed".into(), effects::new_seed().into());
+                    self.cfg.profile_mut().params.insert(profile_effect.clone(), map);
+                    self.changed();
+                }
+            }
             if profile_effect == "heatmap" {
                 ui.add_space(12.0);
                 if ui.button("Reset heatmap").on_hover_text("Forget all typing counts and start fresh").clicked() {
@@ -772,10 +844,11 @@ impl App {
     }
 
     fn themes_tab(&mut self, ui: &mut egui::Ui) {
-        ui.label(RichText::new("Click a theme to apply it to the current profile.").color(DIM));
+        ui.label(RichText::new("Click a theme to apply it to the current profile. Right-click to add it to your roster.").color(DIM));
         ui.add_space(12.0);
         let (cols, w) = grid_dims(ui.available_width(), 230.0);
         let mut apply = None;
+        let mut to_roster = None;
         let n = self.presets.len();
         for start in (0..n).step_by(cols) {
             ui.horizontal(|ui| {
@@ -800,6 +873,12 @@ impl App {
                     if resp.clicked() {
                         apply = Some(i);
                     }
+                    resp.context_menu(|ui| {
+                        if ui.button("Add to roster").clicked() {
+                            to_roster = Some(format!("t:{name}"));
+                            ui.close();
+                        }
+                    });
                 }
             });
             ui.add_space(14.0);
@@ -809,6 +888,229 @@ impl App {
             self.cfg.profile_mut().apply_preset(preset);
             self.changed();
         }
+        if let Some(item) = to_roster {
+            self.cfg.roster.items.push(item);
+            self.changed();
+        }
+    }
+
+    // ------------------------------------------------------------ roster
+
+    fn roster_tab(&mut self, ui: &mut egui::Ui) {
+        let how = match combo_for(&self.cfg, "next") {
+            Some(k) => format!("Press {k} for the next one, or use the tray menu."),
+            None => "Set a shortcut for \"Next in roster\" in Shortcuts, or use the tray menu.".to_string(),
+        };
+        ui.label(RichText::new(format!("Your roster is a playlist of looks. {how}")).color(DIM));
+        ui.add_space(12.0);
+
+        ui.horizontal(|ui| {
+            let mut sh = self.cfg.roster.shuffle;
+            if toggle(ui, &mut sh).changed() {
+                self.cfg.roster.shuffle = sh;
+                self.changed();
+            }
+            ui.label("Shuffle order");
+            ui.add_space(26.0);
+            ui.label(RichText::new("Switch on its own").color(DIM));
+            let opts = [0u32, 1, 5, 15, 30, 60];
+            let name = |m: u32| if m == 0 { "Never".to_string() } else if m == 1 { "Every minute".into() } else { format!("Every {m} min") };
+            let mut cur = self.cfg.roster.auto_minutes;
+            egui::ComboBox::from_id_salt("auto").selected_text(name(cur)).width(150.0).show_ui(ui, |ui| {
+                for m in opts {
+                    ui.selectable_value(&mut cur, m, name(m));
+                }
+            });
+            if cur != self.cfg.roster.auto_minutes {
+                self.cfg.roster.auto_minutes = cur;
+                self.changed();
+            }
+        });
+        ui.add_space(14.0);
+
+        let items = self.cfg.roster.items.clone();
+        let mut act: Option<(&str, usize)> = None;
+        if items.is_empty() {
+            ui.label(RichText::new("The roster is empty, so the shortcut steps through your profiles. Add looks below.").color(DIM));
+        }
+        let width = ui.available_width().min(640.0);
+        for (i, it) in items.iter().enumerate() {
+            let current = i == self.cfg.roster.pos;
+            ui.horizontal(|ui| {
+                let (rect, resp) = ui.allocate_exact_size(vec2(width - 230.0, 44.0), Sense::click());
+                let p = ui.painter();
+                p.rect_filled(rect, 10.0, if current { Color32::from_rgb(30, 30, 33) } else if resp.hovered() { CARD } else { PANEL });
+                p.text(rect.min + vec2(14.0, 22.0), Align2::LEFT_CENTER, format!("{}", i + 1), FontId::proportional(12.0), DIM);
+                p.text(rect.min + vec2(40.0, 7.0), Align2::LEFT_TOP, config::item_label(it), FontId::new(14.5, semi()), TEXT);
+                p.text(rect.min + vec2(40.0, 26.0), Align2::LEFT_TOP, config::item_kind(it), FontId::proportional(11.5), DIM);
+                if current {
+                    p.circle_filled(Pos2::new(rect.max.x - 16.0, rect.center().y), 3.5, TEXT);
+                }
+                if resp.on_hover_text("Click to show it now").clicked() {
+                    act = Some(("show", i));
+                }
+                if ui.add_enabled(i > 0, egui::Button::new("Up")).clicked() {
+                    act = Some(("up", i));
+                }
+                if ui.add_enabled(i + 1 < items.len(), egui::Button::new("Down")).clicked() {
+                    act = Some(("down", i));
+                }
+                if ui.button("Remove").clicked() {
+                    act = Some(("remove", i));
+                }
+            });
+        }
+        if let Some((what, i)) = act {
+            let r = &mut self.cfg.roster;
+            match what {
+                "show" => {
+                    r.pos = i;
+                    let it = r.items[i].clone();
+                    self.cfg.show_item(&it, &mut self.rng);
+                }
+                "up" => r.items.swap(i, i - 1),
+                "down" => r.items.swap(i, i + 1),
+                _ => {
+                    r.items.remove(i);
+                    if r.pos >= r.items.len() {
+                        r.pos = 0;
+                    }
+                }
+            }
+            self.changed();
+        }
+
+        ui.add_space(18.0);
+        ui.label(caption_text("Add to roster"));
+        ui.add_space(6.0);
+        let mut add: Option<String> = None;
+        ui.horizontal_wrapped(|ui| {
+            egui::ComboBox::from_id_salt("add_p").selected_text("A profile").width(170.0).height(400.0).show_ui(ui, |ui| {
+                for p in &self.cfg.profiles {
+                    if ui.selectable_label(false, &p.name).clicked() {
+                        add = Some(format!("p:{}", p.name));
+                    }
+                }
+            });
+            egui::ComboBox::from_id_salt("add_t").selected_text("A theme").width(170.0).height(400.0).show_ui(ui, |ui| {
+                for t in &self.presets {
+                    if ui.selectable_label(false, t.name).clicked() {
+                        add = Some(format!("t:{}", t.name));
+                    }
+                }
+            });
+            egui::ComboBox::from_id_salt("add_e").selected_text("An effect").width(170.0).height(500.0).show_ui(ui, |ui| {
+                for cat in CATEGORIES {
+                    ui.label(caption_text(cat));
+                    for e in effects::all().iter().filter(|e| e.category == *cat) {
+                        if ui.selectable_label(false, e.name).clicked() {
+                            add = Some(format!("e:{}", e.id));
+                        }
+                    }
+                }
+            });
+            if ui.button("Surprise me").on_hover_text("A random look, different every time it comes up").clicked() {
+                add = Some("surprise".into());
+            }
+        });
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            if ui.button("Add all profiles").clicked() {
+                for p in &self.cfg.profiles {
+                    self.cfg.roster.items.push(format!("p:{}", p.name));
+                }
+                self.changed();
+            }
+            if !items.is_empty() && ui.button("Clear roster").clicked() {
+                self.cfg.roster.items.clear();
+                self.cfg.roster.pos = 0;
+                self.changed();
+            }
+        });
+        if let Some(it) = add {
+            self.cfg.roster.items.push(it);
+            self.changed();
+        }
+    }
+
+    // ------------------------------------------------------------ shortcuts
+
+    fn shortcuts_tab(&mut self, ui: &mut egui::Ui) {
+        ui.label(RichText::new("Hold Fn and press a key to control your lights from anywhere, even in games.").color(DIM));
+        ui.add_space(14.0);
+
+        // a key arrived while recording?
+        if let Some(rec) = &self.recording {
+            if let Ok(key) = rec.rx.try_recv() {
+                let slot = rec.slot;
+                self.recording = None;
+                match slot.and_then(|i| self.cfg.hotkeys.get_mut(i)) {
+                    Some(h) => h.key = key.to_string(),
+                    None => self.cfg.hotkeys.push(config::Hotkey { key: key.to_string(), action: "next".into() }),
+                }
+                self.changed();
+            }
+        }
+
+        let mut act: Option<(&str, usize)> = None;
+        let mut new_action: Option<(usize, String)> = None;
+        egui::Grid::new("hotkeys").num_columns(3).spacing([18.0, 12.0]).show(ui, |ui| {
+            for (i, h) in self.cfg.hotkeys.iter().enumerate() {
+                let waiting = self.recording.as_ref().is_some_and(|r| r.slot == Some(i));
+                let label = if waiting { "Press Fn + a key…".to_string() } else { format!("Fn + {}", key_label(&h.key)) };
+                if ui.add_sized([170.0, 30.0], egui::Button::new(RichText::new(label).family(semi()))).on_hover_text("Click, then press a new Fn combo").clicked() {
+                    act = Some(("record", i));
+                }
+                let mut a = h.action.clone();
+                egui::ComboBox::from_id_salt(("act", i)).selected_text(config::action_label(&a)).width(230.0).show_ui(ui, |ui| {
+                    for (id, name) in config::ACTIONS {
+                        ui.selectable_value(&mut a, id.to_string(), *name);
+                    }
+                });
+                if a != h.action {
+                    new_action = Some((i, a));
+                }
+                if ui.button("Remove").clicked() {
+                    act = Some(("remove", i));
+                }
+                ui.end_row();
+            }
+        });
+        if let Some((i, a)) = new_action {
+            self.cfg.hotkeys[i].action = a;
+            self.changed();
+        }
+        ui.add_space(10.0);
+        let waiting_new = self.recording.as_ref().is_some_and(|r| r.slot.is_none());
+        let add_label = if waiting_new { "Press Fn + a key on your keyboard…" } else { "Add shortcut" };
+        if ui.button(add_label).clicked() {
+            act = Some(("add", 0));
+        }
+        if self.recording.is_some() && ui.button("Cancel").clicked() {
+            self.recording = None;
+        }
+        match act {
+            Some(("record", i)) => self.start_recording(ui.ctx(), Some(i)),
+            Some(("add", _)) => self.start_recording(ui.ctx(), None),
+            Some(("remove", i)) => {
+                self.cfg.hotkeys.remove(i);
+                self.changed();
+            }
+            _ => {}
+        }
+
+        ui.add_space(22.0);
+        ui.label(RichText::new(
+            "Tip: Fn + \\ is the most reliable: the keyboard always reports it and it doesn't type anything. Other Fn combos \
+             work too, but the keyboard sometimes skips reporting them, and some still do their normal job \
+             (Fn + ] also types ]). Shortcuts need the background service running.",
+        ).color(DIM).size(12.0));
+    }
+
+    fn start_recording(&mut self, ctx: &egui::Context, slot: Option<usize>) {
+        let ctx = ctx.clone();
+        let (listener, rx) = fnkeys::Listener::start(move || ctx.request_repaint());
+        self.recording = Some(Recording { slot, _listener: listener, rx });
     }
 }
 
@@ -820,7 +1122,11 @@ impl eframe::App for App {
         }
         self.sync_file();
         self.update_preview(&ctx);
-        if self.tab != Tab::Customize {
+        if self.tab != Tab::Shortcuts {
+            // stop listening for Fn combos once the tab is left
+            self.recording = None;
+        }
+        if matches!(self.tab, Tab::Effects | Tab::Themes) {
             self.update_fakes();
         } else if !self.thumbs.is_empty() {
             // free the thumbnails while they aren't shown
@@ -848,7 +1154,13 @@ impl eframe::App for App {
                 ui.vertical_centered(|ui| self.keyboard_view(ui));
                 ui.add_space(18.0);
                 ui.horizontal(|ui| {
-                    let tabs = [(Tab::Effects, "Effects"), (Tab::Customize, "Customize"), (Tab::Themes, "Themes")];
+                    let tabs = [
+                        (Tab::Effects, "Effects"),
+                        (Tab::Customize, "Customize"),
+                        (Tab::Themes, "Themes"),
+                        (Tab::Roster, "Roster"),
+                        (Tab::Shortcuts, "Shortcuts"),
+                    ];
                     let names: Vec<&str> = tabs.iter().map(|t| t.1).collect();
                     let cur = tabs.iter().position(|t| t.0 == self.tab).unwrap_or(0);
                     if let Some(i) = segmented(ui, &names, cur) {
@@ -863,6 +1175,8 @@ impl eframe::App for App {
                     Tab::Effects => self.effects_tab(ui),
                     Tab::Customize => self.customize_tab(ui),
                     Tab::Themes => self.themes_tab(ui),
+                    Tab::Roster => self.roster_tab(ui),
+                    Tab::Shortcuts => self.shortcuts_tab(ui),
                 });
             });
 
@@ -1114,6 +1428,21 @@ fn draw_arrow(p: &egui::Painter, c: Pos2, dir: Vec2, size: f32, col: Color32) {
     let side = vec2(-dir.y, dir.x);
     let pts = vec![c + dir * size, c - dir * size * 0.7 + side * size, c - dir * size * 0.7 - side * size];
     p.add(egui::Shape::convex_polygon(pts, col, Stroke::NONE));
+}
+
+/// Label of a key id ("backslash" -> "\").
+fn key_label(id: &str) -> &str {
+    layout::index_of(id).map(|i| KEYS[i].label).unwrap_or(id)
+}
+
+/// "Fn + \" if an action has a shortcut.
+fn combo_for(cfg: &Config, action: &str) -> Option<String> {
+    cfg.hotkeys.iter().find(|h| h.action == action).map(|h| format!("Fn + {}", key_label(&h.key)))
+}
+
+/// " (Fn + \)" for tooltips, or "".
+fn shortcut_for(cfg: &Config, action: &str) -> String {
+    combo_for(cfg, action).map(|k| format!(" ({k})")).unwrap_or_default()
 }
 
 fn exit_label(mode: &str) -> String {

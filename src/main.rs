@@ -7,6 +7,7 @@ mod config;
 mod daemon;
 mod effects;
 mod engine;
+mod fnkeys;
 mod gui;
 mod icon;
 mod layout;

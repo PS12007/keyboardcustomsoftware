@@ -8,6 +8,10 @@ use crate::layout::{self, CENTER, KEYS};
 use serde_json::{Map, Value};
 use std::f32::consts::TAU;
 
+mod extra;
+use extra::{Clock, Confetti, Dream, Interference, PacMan, Radar, Shuffle, Tetris, Traffic, Warp, CHANGE_EVERY, SHUFFLE_EVERY};
+pub use extra::{needs_seed, new_seed, random_look};
+
 // ---------------------------------------------------------------- parameters
 
 #[derive(Clone, Copy)]
@@ -146,7 +150,7 @@ fn gradient_static(p: &Params) -> bool {
     !p.b("move")
 }
 
-pub const CATEGORIES: &[&str] = &["Ambient", "Reactive", "Audio", "Games", "Screen", "Static", "On keyboard"];
+pub const CATEGORIES: &[&str] = &["Random", "Ambient", "Reactive", "Audio", "Games", "Screen", "Static", "On keyboard"];
 
 pub fn all() -> &'static [EffectInfo] {
     EFFECTS
@@ -2045,6 +2049,21 @@ const BG_BLACK: ParamDef = p("color2", "Background", Kind::Color([0, 0, 0]));
 const SENS: ParamDef = p("sensitivity", "Sensitivity", Kind::Float(0.4));
 
 static EFFECTS: &[EffectInfo] = &[
+    // random
+    soft!("dream", "Dream", "Random", Dream, &[
+        p("change", "Change design", Kind::Choice(CHANGE_EVERY, 2)),
+        SPEED,
+    ], "Makes up a brand-new design from random patterns and colors. Never the same twice."),
+    soft!("shuffle", "Shuffle", "Random", Shuffle, &[
+        p("every", "Switch", Kind::Choice(SHUFFLE_EVERY, 1)),
+    ], "Plays a different random effect with random colors every so often."),
+    soft!("confetti", "Confetti", "Random", Confetti, &[
+        p("color", "Color", Kind::Color([255, 200, 0])),
+        p("rainbow", "Random colors", Kind::Bool(true)),
+        BG_BLACK,
+        p("density", "How many", Kind::Float(0.4)),
+        SPEED,
+    ], "Random keys pop with bright colors and fade away."),
     // ambient
     soft!("rainbow", "Rainbow Wave", "Ambient", Rainbow, &[
         p("direction", "Direction", Kind::Choice(WAVE_DIRS, 0)),
@@ -2209,6 +2228,39 @@ static EFFECTS: &[EffectInfo] = &[
         p("intensity", "Glitchiness", Kind::Float(0.4)),
         SPEED,
     ], "Calm colors that keep breaking up like a bad video signal."),
+    soft!("warp", "Warp Speed", "Ambient", Warp, &[
+        p("color", "Star color", Kind::Color([220, 235, 255])),
+        p("rainbow", "Colorful stars", Kind::Bool(false)),
+        p("color2", "Background", Kind::Color([0, 0, 6])),
+        p("density", "Stars", Kind::Float(0.4)),
+        p("trail", "Streak length", Kind::Float(0.5)),
+        SPEED,
+    ], "Stars stream out from the middle, like jumping to hyperspace."),
+    soft!("radar", "Radar", "Ambient", Radar, &[
+        p("color", "Sweep", Kind::Color([0, 255, 90])),
+        p("color2", "Blips", Kind::Color([255, 255, 255])),
+        p("color3", "Background", Kind::Color([0, 8, 3])),
+        p("density", "Blips", Kind::Float(0.4)),
+        SPEED,
+    ], "A radar sweep turns around the middle and lights up blips as it passes."),
+    soft!("interference", "Interference", "Ambient", Interference, &[
+        p("palette", "Palette", Kind::Choice(color::PALETTE_NAMES, 2)),
+        p("scale", "Ring size", Kind::Float(0.5)),
+        SPEED,
+    ], "Ripples from three moving points overlap into shifting patterns."),
+    soft!("traffic", "Night Traffic", "Ambient", Traffic, &[
+        p("color", "Headlights", Kind::Color([255, 240, 200])),
+        p("color2", "Taillights", C_RED),
+        p("color3", "Road", Kind::Color([2, 2, 6])),
+        p("density", "Traffic", Kind::Float(0.4)),
+        SPEED,
+    ], "Cars drive along the rows at night, with the odd police car."),
+    soft!("clock", "Clock", "Ambient", Clock, &[
+        p("color", "Hours (F-keys)", Kind::Color([255, 160, 40])),
+        p("color2", "Minutes (numbers)", Kind::Color([0, 200, 255])),
+        p("color3", "Seconds (Q row)", Kind::Color([255, 255, 255])),
+        p("color4", "Background", Kind::Color([0, 0, 0])),
+    ], "Tells the time: F-keys are hours, the number row fills up with minutes, a dot ticks the seconds."),
     // games
     soft!("snake", "Snake", "Games", Snake, &[
         p("color", "Snake", Kind::Color([0, 255, 80])),
@@ -2230,6 +2282,15 @@ static EFFECTS: &[EffectInfo] = &[
         BG_BLACK,
         SPEED,
     ], "Conway's Game of Life: cells are born, live and die on your keys."),
+    soft!("tetris", "Tetris", "Games", Tetris, &[
+        p("color3", "Background", Kind::Color([0, 0, 0])),
+        SPEED,
+    ], "Sideways Tetris that plays itself: pieces slide in from the right and full columns clear."),
+    soft!("pacman", "Pac-Man", "Games", PacMan, &[
+        p("color", "Pac-Man", Kind::Color([255, 220, 0])),
+        p("color2", "Background", Kind::Color([0, 0, 12])),
+        SPEED,
+    ], "Pac-Man munches along every row with the ghosts on his tail."),
     // reactive
     soft!("ripple", "Ripple", "Reactive", Ripple, &[
         p("color", "Ripple color", Kind::Color([0, 230, 255])),
@@ -2361,5 +2422,39 @@ mod tests {
             }
             assert!(lit || matches!(info.mode, Mode::Onboard(_)), "{} never lit up", info.id);
         }
+    }
+}
+
+#[cfg(test)]
+mod snapshots {
+    use super::*;
+
+    /// Dumps key colors of some effects at a few moments (for eyeballing designs).
+    /// `SNAP_OUT=file cargo test --release snapshot -- --ignored`
+    #[test]
+    #[ignore]
+    fn snapshot() {
+        let Ok(path) = std::env::var("SNAP_OUT") else { return };
+        let ids = std::env::var("SNAP_IDS").unwrap_or_default();
+        let audio = AudioFrame::default();
+        let kc = vec![None; KEYS.len()];
+        let mut lines = Vec::new();
+        for id in ids.split(',') {
+            let info = find(id);
+            let mut map = Map::new();
+            for (n, seed) in [(0u32, 11u64), (1, 22), (2, 33)] {
+                map.insert("seed".into(), seed.into());
+                let mut fx = (info.make)();
+                let p = Params { defs: info.params, map: &map };
+                let mut out = vec![[0.0; 3]; KEYS.len()];
+                for f in 0..(240 + n * 170) {
+                    let c = Ctx { t: f as f32 / 60.0, dt: 1.0 / 60.0, audio: &audio, keycolors: &kc, screen: &[] };
+                    fx.render(&c, &p, &mut out);
+                }
+                let px: Vec<String> = out.iter().map(|c| color::to_hex(color::to_u8(*c))).collect();
+                lines.push(format!("{id} {}", px.join(" ")));
+            }
+        }
+        std::fs::write(path, lines.join("\n")).unwrap();
     }
 }

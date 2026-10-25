@@ -2,7 +2,9 @@
 //! Uses a few MB of RAM; the settings window is a separate process that only runs while open.
 
 use crate::config::{self, Config};
+use crate::color::Rng;
 use crate::effects;
+use crate::fnkeys;
 use crate::engine::{self, Shared};
 use crate::icon;
 use crate::sys::{self, InstanceLock, KeyHook, APP_TITLE, DAEMON_MUTEX};
@@ -12,7 +14,8 @@ use std::sync::{Arc, Mutex};
 use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem, Submenu};
 use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    DispatchMessageW, GetMessageW, PostQuitMessage, SetTimer, TranslateMessage, MSG, WM_TIMER,
+    DispatchMessageW, GetMessageW, PostQuitMessage, PostThreadMessageW, SetTimer, TranslateMessage, MSG, WM_APP,
+    WM_TIMER,
 };
 
 /// File the settings window creates to ask the service to quit.
@@ -23,6 +26,8 @@ pub fn quit_flag() -> std::path::PathBuf {
 struct Ids {
     open: MenuId,
     pause: MenuId,
+    next: MenuId,
+    surprise: MenuId,
     autostart: MenuId,
     quit: MenuId,
     profiles: Vec<MenuId>,
@@ -34,17 +39,21 @@ fn build_menu(cfg: &Config) -> (Menu, Ids) {
     let profiles = Submenu::new("Profile", true);
     let mut pids = Vec::new();
     for (i, p) in cfg.profiles.iter().enumerate() {
-        let item = CheckMenuItem::new(&p.name, true, i == cfg.active, None);
+        let item = CheckMenuItem::new(&p.name, true, i == cfg.active && cfg.live.is_none(), None);
         pids.push(item.id().clone());
         let _ = profiles.append(&item);
     }
     let pause = CheckMenuItem::new("Pause lighting", true, cfg.paused, None);
+    let next = MenuItem::new(format!("Next look{}", shortcut_hint(cfg, "next")), true, None);
+    let surprise = MenuItem::new(format!("Surprise me{}", shortcut_hint(cfg, "surprise")), true, None);
     let autostart = CheckMenuItem::new("Start with Windows", true, sys::autostart_enabled(), None);
     let quit = MenuItem::new("Quit", true, None);
     let _ = menu.append_items(&[
         &open,
         &PredefinedMenuItem::separator(),
         &profiles,
+        &next,
+        &surprise,
         &pause,
         &PredefinedMenuItem::separator(),
         &autostart,
@@ -53,11 +62,23 @@ fn build_menu(cfg: &Config) -> (Menu, Ids) {
     let ids = Ids {
         open: open.id().clone(),
         pause: pause.id().clone(),
+        next: next.id().clone(),
+        surprise: surprise.id().clone(),
         autostart: autostart.id().clone(),
         quit: quit.id().clone(),
         profiles: pids,
     };
     (menu, ids)
+}
+
+/// Menu suffix like "Fn+\" (after a tab) when an action has a shortcut.
+fn shortcut_hint(cfg: &Config, action: &str) -> String {
+    cfg.hotkeys
+        .iter()
+        .find(|h| h.action == action)
+        .and_then(|h| crate::layout::index_of(&h.key))
+        .map(|i| format!("\tFn+{}", crate::layout::KEYS[i].label))
+        .unwrap_or_default()
 }
 
 fn tooltip(cfg: &Config) -> String {
@@ -88,6 +109,9 @@ struct Service {
     hook: Option<KeyHook>,
     tx: Sender<u16>,
     last_mtime: Option<std::time::SystemTime>,
+    rng: Rng,
+    /// when the roster last switched (for "switch every N minutes")
+    last_switch: std::time::Instant,
 }
 
 impl Service {
@@ -122,7 +146,31 @@ impl Service {
             self.last_mtime = m;
             self.apply(config::load(), false);
         }
+        let mins = self.cfg().roster.auto_minutes;
+        if mins > 0 && self.last_switch.elapsed().as_secs() >= mins as u64 * 60 {
+            self.action("next");
+        }
         true
+    }
+
+    /// Run a shortcut / menu action.
+    fn action(&mut self, what: &str) {
+        let mut cfg = self.cfg();
+        if cfg.run_action(what, &mut self.rng) {
+            if matches!(what, "next" | "prev" | "surprise") {
+                self.last_switch = std::time::Instant::now();
+            }
+            self.apply(cfg, true);
+        }
+    }
+
+    /// Fn + key pressed.
+    fn on_fn_key(&mut self, key: &str) {
+        let actions: Vec<String> =
+            self.cfg().hotkeys.iter().filter(|h| h.key == key).map(|h| h.action.clone()).collect();
+        for a in actions {
+            self.action(&a);
+        }
     }
 
     fn on_menu(&mut self, id: &MenuId) -> bool {
@@ -134,11 +182,15 @@ impl Service {
         } else if *id == self.ids.pause {
             cfg.paused = !cfg.paused;
             self.apply(cfg, true);
+        } else if *id == self.ids.next {
+            self.action("next");
+        } else if *id == self.ids.surprise {
+            self.action("surprise");
         } else if *id == self.ids.autostart {
             sys::set_autostart(!sys::autostart_enabled());
             self.apply(cfg, false);
         } else if let Some(i) = self.ids.profiles.iter().position(|p| p == id) {
-            cfg.active = i;
+            cfg.select(i);
             self.apply(cfg, true);
         }
         true
@@ -185,7 +237,21 @@ pub fn run(open_window: bool) {
         .build()
         .expect("tray icon");
 
-    let mut svc = Service { shared: shared.clone(), tray, ids, hook: None, tx, last_mtime: config::mtime() };
+    let mut svc = Service {
+        shared: shared.clone(),
+        tray,
+        ids,
+        hook: None,
+        tx,
+        last_mtime: config::mtime(),
+        rng: Rng::default(),
+        last_switch: std::time::Instant::now(),
+    };
+    // Fn + key shortcuts; the reader thread wakes this loop with WM_APP
+    let tid = unsafe { windows_sys::Win32::System::Threading::GetCurrentThreadId() };
+    let (_fn_listener, fn_rx) = fnkeys::Listener::start(move || unsafe {
+        PostThreadMessageW(tid, WM_APP, 0, 0);
+    });
     update_hook(&cfg, &mut svc.hook, &svc.tx);
 
     if open_window {
@@ -205,6 +271,9 @@ pub fn run(open_window: bool) {
             let mut keep = true;
             if msg.message == WM_TIMER {
                 keep &= svc.on_timer();
+            }
+            while let Ok(key) = fn_rx.try_recv() {
+                svc.on_fn_key(key);
             }
             while let Ok(ev) = MenuEvent::receiver().try_recv() {
                 keep &= svc.on_menu(&ev.id);

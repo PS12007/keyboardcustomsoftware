@@ -12,6 +12,7 @@ mod icon;
 mod layout;
 mod layout_data;
 mod protocol;
+mod screen;
 mod sys;
 
 fn main() {

@@ -154,6 +154,8 @@ pub fn run(open_window: bool) {
         return;
     };
     let _ = std::fs::remove_file(quit_flag());
+    // this process owns the typing heatmap file
+    crate::effects::set_persist(true);
 
     let cfg = config::load();
     if config::mtime().is_none() {

@@ -204,3 +204,11 @@ impl Drop for KeyHook {
         }
     }
 }
+
+/// Local time of day as 0..1 (0 = midnight, 0.5 = noon).
+pub fn local_day_fraction() -> f32 {
+    let mut st = unsafe { std::mem::zeroed() };
+    unsafe { windows_sys::Win32::System::SystemInformation::GetLocalTime(&mut st) };
+    let secs = st.wHour as f32 * 3600.0 + st.wMinute as f32 * 60.0 + st.wSecond as f32 + st.wMilliseconds as f32 / 1000.0;
+    secs / 86400.0
+}

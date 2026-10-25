@@ -14,6 +14,7 @@ use crate::config::{Config, Profile};
 use crate::effects::{self, AudioFrame, Ctx, Effect, EffectInfo, Mode, Params};
 use crate::layout::{self, KEYS};
 use crate::protocol::{Frame, Keyboard, SLOTS};
+use crate::screen::ScreenCapture;
 use hidapi::{HidApi, HidResult};
 use serde_json::{Map, Value};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -30,6 +31,8 @@ pub struct Renderer {
     start: Instant,
     last: f32,
     pub out: Vec<Rgb>,
+    /// only exists while a screen effect is selected
+    screen: Option<ScreenCapture>,
 }
 
 impl Renderer {
@@ -44,6 +47,7 @@ impl Renderer {
             start: Instant::now(),
             last: 0.0,
             out: vec![[0.0; 3]; KEYS.len()],
+            screen: None,
         }
     }
 
@@ -84,8 +88,19 @@ impl Renderer {
         let t = self.now();
         let dt = if t >= self.last { (t - self.last).min(0.1) } else { 0.016 };
         self.last = t;
-        let ctx = Ctx { t, dt, audio, keycolors: &self.keycolors };
         let p = Params { defs: self.info.params, map: &self.params };
+        if self.info.uses_screen {
+            if self.screen.is_none() {
+                self.screen = Some(ScreenCapture::new());
+            }
+            if let Some(s) = self.screen.as_mut() {
+                s.update(p.choice("area") == 1);
+            }
+        } else {
+            self.screen = None;
+        }
+        let screen = self.screen.as_ref().map(|s| s.px.as_slice()).unwrap_or(&[]);
+        let ctx = Ctx { t, dt, audio, keycolors: &self.keycolors, screen };
         self.effect.render(&ctx, &p, &mut self.out);
     }
 

@@ -10,7 +10,11 @@ use std::f32::consts::TAU;
 
 mod extra;
 use extra::{Clock, Confetti, Dream, Interference, PacMan, Radar, Shuffle, Tetris, Traffic, Warp, CHANGE_EVERY, SHUFFLE_EVERY};
-pub use extra::{needs_seed, new_seed, random_look};
+pub use extra::{needs_seed, new_seed, random_look, random_params};
+mod more;
+mod reactive;
+use reactive::{BlackHole, Bounce, Echo, ForceField, Lightning, PianoRoll, Splat, Wildfire};
+use more::{AudioAurora, Caustics, Chrome, Constellation, Fireflies, Flip, Ink, Nebula, Overdrive, Pendulum, Shockwave, Silk, Synthwave, Trail, Tunnel};
 
 // ---------------------------------------------------------------- parameters
 
@@ -2261,6 +2265,42 @@ static EFFECTS: &[EffectInfo] = &[
         p("color3", "Seconds (Q row)", Kind::Color([255, 255, 255])),
         p("color4", "Background", Kind::Color([0, 0, 0])),
     ], "Tells the time: F-keys are hours, the number row fills up with minutes, a dot ticks the seconds."),
+    soft!("silk", "Silk", "Ambient", Silk, &[
+        p("color", "Color 1", Kind::Color([20, 40, 255])),
+        p("color2", "Color 2", Kind::Color([255, 40, 150])),
+        p("scale", "Fold size", Kind::Float(0.4)),
+        SPEED,
+    ], "Slow folds of color moving like silk, with a soft sheen."),
+    soft!("nebula", "Nebula", "Ambient", Nebula, &[
+        p("palette", "Palette", Kind::Choice(color::PALETTE_NAMES, 7)),
+        SPEED,
+    ], "Glowing clouds of gas drift through space, with stars peeking through."),
+    soft!("fireflies", "Fireflies", "Ambient", Fireflies, &[
+        p("color", "Firefly color", Kind::Color([200, 255, 60])),
+        p("color2", "Night", Kind::Color([0, 8, 4])),
+        p("density", "How many", Kind::Float(0.4)),
+        SPEED,
+    ], "Fireflies drift around in the dark and blink on and off."),
+    soft!("caustics", "Pool Light", "Ambient", Caustics, &[
+        p("color", "Light", Kind::Color([180, 255, 255])),
+        p("color2", "Water", Kind::Color([0, 50, 110])),
+        SPEED,
+    ], "Rippling light like the bottom of a swimming pool."),
+    soft!("synthwave", "Outrun", "Ambient", Synthwave, &[
+        p("color", "Sun", Kind::Color([255, 210, 0])),
+        p("color2", "Grid", Kind::Color([255, 0, 200])),
+        SPEED,
+    ], "An 80s sunset: a striped sun over a neon grid racing toward you."),
+    soft!("pendulum", "Pendulum Wave", "Ambient", Pendulum, &[
+        p("color", "Color", Kind::Color([255, 255, 255])),
+        p("rainbow", "Rainbow", Kind::Bool(true)),
+        BG_BLACK,
+        SPEED,
+    ], "A row of pendulums drifting in and out of step, making new patterns."),
+    soft!("chrome", "Liquid Metal", "Ambient", Chrome, &[
+        p("color", "Metal", Kind::Color([200, 210, 230])),
+        SPEED,
+    ], "Soft reflections roll across the keys like polished metal."),
     // games
     soft!("snake", "Snake", "Games", Snake, &[
         p("color", "Snake", Kind::Color([0, 255, 80])),
@@ -2324,6 +2364,91 @@ static EFFECTS: &[EffectInfo] = &[
         p("idle", "Glow when idle", Kind::Float(0.3)),
         SPEED,
     ], "Keys catch fire when pressed and embers float up.", true, false, never),
+    soft!("ink", "Ink", "Reactive", Ink, &[
+        p("palette", "Palette", Kind::Choice(color::PALETTE_NAMES, 7)),
+        BG_BLACK,
+        p("idle", "Drip on its own when idle", Kind::Bool(true)),
+        SPEED,
+    ], "Every key drops ink that slowly spreads into its neighbors and mixes.", true, false, never),
+    soft!("shockwave", "Shockwave", "Reactive", Shockwave, &[
+        p("color", "Color", Kind::Color([120, 200, 255])),
+        p("prism", "Rainbow edge", Kind::Bool(true)),
+        BG_BLACK,
+        p("width", "Ring width", Kind::Float(0.3)),
+        SPEED,
+    ], "Each key flashes and sends out a shockwave with a rainbow edge.", true, false, never),
+    soft!("constellation", "Constellation", "Reactive", Constellation, &[
+        p("color", "Stars", Kind::Color([255, 255, 255])),
+        p("color2", "Lines", Kind::Color([80, 140, 255])),
+        p("color3", "Sky", Kind::Color([0, 0, 6])),
+        SPEED,
+    ], "The keys you type become stars, joined up in the order you typed them.", true, false, never),
+    soft!("overdrive", "Overdrive", "Reactive", Overdrive, &[
+        p("color", "Calm", Kind::Color([0, 90, 255])),
+        p("color2", "Hot", Kind::Color([255, 40, 0])),
+        p("meter", "Speed meter on F-keys", Kind::Bool(true)),
+        SPEED,
+    ], "Calm when you're idle. The faster you type, the hotter it gets.", true, false, never),
+    soft!("trail", "Light Trail", "Reactive", Trail, &[
+        p("color", "Color", Kind::Color([0, 220, 255])),
+        p("rainbow", "Rainbow trail", Kind::Bool(true)),
+        BG_BLACK,
+        p("trail", "Trail length", Kind::Float(0.5)),
+        SPEED,
+    ], "A light flies to every key you press and leaves a glowing trail.", true, false, never),
+    soft!("flip", "Color Flip", "Reactive", Flip, &[
+        p("palette", "Palette", Kind::Choice(color::PALETTE_NAMES, 1)),
+        SPEED,
+    ], "Each key press sends a wave that flips the keyboard to a new color.", true, false, never),
+    soft!("echo", "Echo", "Reactive", Echo, &[
+        p("color", "Color", Kind::Color([0, 200, 255])),
+        p("rainbow", "Shift colors", Kind::Bool(true)),
+        BG_BLACK,
+        p("feedback", "Echoes", Kind::Float(0.5)),
+        SPEED,
+    ], "Every key repeats a few times after you press it, like a delay pedal.", true, false, never),
+    soft!("bounce", "Bounce", "Reactive", Bounce, &[
+        p("color", "Ball color", Kind::Color([255, 200, 0])),
+        p("rainbow", "Colorful balls", Kind::Bool(true)),
+        BG_BLACK,
+        p("trail", "Trail length", Kind::Float(0.5)),
+        SPEED,
+    ], "Each key launches a glowing ball that bounces around the keyboard.", true, false, never),
+    soft!("lightning", "Chain Lightning", "Reactive", Lightning, &[
+        p("color", "Bolt color", Kind::Color([140, 170, 255])),
+        p("color2", "Sky", Kind::Color([2, 2, 12])),
+        SPEED,
+    ], "Lightning arcs from each key you press to the one before it.", true, false, never),
+    soft!("piano", "Piano Roll", "Reactive", PianoRoll, &[
+        p("color", "Color", Kind::Color([0, 230, 255])),
+        p("rainbow", "Color by position", Kind::Bool(true)),
+        BG_BLACK,
+        p("trail", "Note length", Kind::Float(0.4)),
+        SPEED,
+    ], "Each key sends a note floating up to the top, like a piano roll.", true, false, never),
+    soft!("splat", "Paint Splat", "Reactive", Splat, &[
+        p("palette", "Palette", Kind::Choice(color::PALETTE_NAMES, 8)),
+        BG_BLACK,
+        SPEED,
+    ], "Typing splats paint that drips down the keys and slowly dries.", true, false, never),
+    soft!("wildfire", "Wildfire", "Reactive", Wildfire, &[
+        p("color", "Grass", Kind::Color([40, 255, 60])),
+        p("spread", "How fast it spreads", Kind::Float(0.5)),
+        SPEED,
+    ], "Typing starts a fire that spreads key to key, burns out, then grows back.", true, false, never),
+    soft!("forcefield", "Force Field", "Reactive", ForceField, &[
+        p("color", "Calm", Kind::Color([40, 120, 255])),
+        p("color2", "Blasted", Kind::Color([255, 60, 200])),
+        p("color3", "Background", Kind::Color([0, 0, 0])),
+        p("density", "Sparks", Kind::Float(0.5)),
+        SPEED,
+    ], "Drifting sparks fill the keys, and every key press blasts them away.", true, false, never),
+    soft!("blackhole", "Black Hole", "Reactive", BlackHole, &[
+        p("color", "Color", Kind::Color([255, 120, 0])),
+        p("rainbow", "Rainbow", Kind::Bool(false)),
+        BG_BLACK,
+        SPEED,
+    ], "Each key opens a tiny black hole: color spirals in, then it collapses in a flash.", true, false, never),
     // audio
     soft!("audio_bars", "Audio Bars", "Audio", AudioBars, &[
         p("style", "Colors", Kind::Choice(BAR_STYLES, 0)),
@@ -2355,6 +2480,16 @@ static EFFECTS: &[EffectInfo] = &[
         p("rainbow", "Rainbow", Kind::Bool(true)),
         SENS,
     ], "Rings around the center: bass in the middle, treble at the edges.", false, true, never),
+    soft!("audio_aurora", "Sound Aurora", "Audio", AudioAurora, &[
+        p("color", "Bottom", Kind::Color([0, 255, 140])),
+        p("color2", "Top", Kind::Color([140, 0, 255])),
+        SENS,
+    ], "Soft curtains of light rise and fall with each pitch of the music.", false, true, never),
+    soft!("tunnel", "Bass Tunnel", "Audio", Tunnel, &[
+        p("color", "Color", Kind::Color([255, 0, 120])),
+        p("rainbow", "Rainbow", Kind::Bool(true)),
+        SENS,
+    ], "Rings fly out of the middle; every bass hit fires a big one.", false, true, never),
     // screen
     soft!("screen_grid", "Screen Grid", "Screen", ScreenGrid, &[
         p("area", "Area", Kind::Choice(SCREEN_AREAS, 0)),
@@ -2449,6 +2584,10 @@ mod snapshots {
                 let mut out = vec![[0.0; 3]; KEYS.len()];
                 for f in 0..(240 + n * 170) {
                     let c = Ctx { t: f as f32 / 60.0, dt: 1.0 / 60.0, audio: &audio, keycolors: &kc, screen: &[] };
+                    // pretend someone is typing
+                    if info.uses_keys && f % 13 == 0 {
+                        fx.key((f as usize / 13 * 37 + 11) % KEYS.len(), c.t);
+                    }
                     fx.render(&c, &p, &mut out);
                 }
                 let px: Vec<String> = out.iter().map(|c| color::to_hex(color::to_u8(*c))).collect();

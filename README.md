@@ -2,16 +2,17 @@
 
 Lightweight custom RGB lighting for the **Surmen V400** keyboard (75% layout with a knob, USB ID `320F:505B`). It replaces the vendor app.
 
-- **55+ effects:** rainbow wave, plasma, northern lights, fire, ocean, matrix rain, starry night, galaxy, kaleidoscope, day & night sky, rainfall, snowfall, candlelight, neon sign, DNA helix, bubbles, glitch, heartbeat, scanner, fireworks, lava lamp, lightning storm, comets, warp speed, radar, night traffic, interference, a clock, and more
+- **95+ effects:** silk, nebula, fireflies, pool light, outrun, pendulum wave, liquid metal, rainbow wave, plasma, northern lights, fire, ocean, matrix rain, starry night, galaxy, kaleidoscope, day & night sky, rainfall, snowfall, candlelight, neon sign, DNA helix, bubbles, glitch, heartbeat, scanner, fireworks, lava lamp, lightning storm, comets, warp speed, radar, night traffic, interference, a clock, and more
 - **Random designs:** *Dream* makes up a brand-new design from random patterns and colors (never the same twice), *Shuffle* plays a different random effect every so often, and **Surprise me** picks a random look in one click
 - **Fn shortcuts and a roster:** build a playlist of profiles, themes and effects, then press **`Fn + \`** to step through it (shuffle and auto-switch optional). Record your own Fn combos for next, previous, surprise, brightness or lights on/off
 - **Games that play themselves:** Snake, Pong, Tetris (sideways), Pac-Man and Conway's Game of Life on your keys
-- **Reactive effects:** ripple, key glow, crosshair, sparks, burning keys, and a typing heatmap that remembers your typing across restarts
-- **Audio effects:** equalizer bars, bass pulse, sound wave, beat ripples, sound fire and sound rings driven by whatever your PC is playing
+- **Reactive effects:** ink that spreads between keys, shockwaves, constellations drawn in the order you type, Overdrive (gets hotter the faster you type), a light trail, color flip, echo, bouncing balls, chain lightning, piano roll, paint splats, wildfire, a force field, black holes, ripple, key glow, crosshair, sparks, burning keys, and a typing heatmap that remembers your typing across restarts
+- **Audio effects:** equalizer bars, bass pulse, sound wave, beat ripples, sound fire, sound rings, sound aurora and a bass tunnel driven by whatever your PC is playing
 - **Screen Grid:** every key shows the color of its part of your screen, like a tiny live copy of it
 - **Custom keys:** paint each key yourself by clicking it in the preview
 - **All 18 built-in keyboard effects**, with brightness, speed and color controls
-- **65+ themes** with live previews, applied with one click, plus profiles you can switch from the tray
+- **95+ themes** with live previews, applied with one click, plus profiles you can switch from the tray
+- **A polished settings window:** hover any effect or theme to preview it on the big keyboard, search, star favorites, two-color palettes, random colors
 - Runs quietly in the **system tray** and can start with Windows
 
 ## Light on resources
@@ -70,6 +71,8 @@ src/
   engine.rs      renders effects and decides what to send
   effects.rs     all effects and their settings
   effects/extra.rs  random designs (Dream, Shuffle), more effects, Tetris, Pac-Man
+  effects/more.rs   noise-based ambient effects, typing-speed and spreading effects
+  effects/reactive.rs  more typing-reactive effects
   fnkeys.rs      Fn + key shortcuts
   screen.rs      tiny live copy of the screen for Screen Grid
   protocol.rs    USB/HID protocol

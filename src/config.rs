@@ -47,6 +47,9 @@ pub struct Config {
     /// Fn + key shortcuts
     #[serde(default = "default_hotkeys")]
     pub hotkeys: Vec<Hotkey>,
+    /// effect ids starred in the gallery
+    #[serde(default)]
+    pub favorites: Vec<String>,
 }
 
 /// The list of looks Fn+\ steps through.
@@ -158,6 +161,7 @@ impl Default for Config {
             live: None,
             roster: Roster::default(),
             hotkeys: default_hotkeys(),
+            favorites: Vec::new(),
         }
     }
 }
@@ -450,6 +454,36 @@ pub fn presets() -> Vec<Preset> {
         pr("Lavender Breath", "breathing", json!({"color": "#b388ff", "speed": 0.4}), ["#1a0f2a", "#7a50c0", "#b388ff"]),
         pr("Focus", "solid", json!({"color": "#ffcf9e"}), ["#ffcf9e", "#ffe2c4", "#fff4e8"]),
         pr("Stealth", "solid", json!({"color": "#300000"}), ["#000000", "#180000", "#300000"]),
+        pr("Ink Wash", "ink", json!({"palette": "Ocean", "speed": 0.45}), ["#000a50", "#0090ff", "#00ffaa"]),
+        pr("Watercolor", "ink", json!({"palette": "Candy", "color2": "#06040a", "speed": 0.5}), ["#ff78c8", "#ffe678", "#78ffdc"]),
+        pr("Sonic Boom", "shockwave", json!({"color": "#78c8ff", "prism": true, "width": 0.3}), ["#000000", "#78c8ff", "#ff40a0"]),
+        pr("Red Alert", "shockwave", json!({"color": "#ff2000", "prism": false, "color2": "#0a0000", "width": 0.45}), ["#0a0000", "#ff2000", "#ffa080"]),
+        pr("Star Map", "constellation", json!({"speed": 0.45}), ["#000006", "#5080ff", "#ffffff"]),
+        pr("Golden Thread", "constellation", json!({"color": "#fff0c0", "color2": "#ff9a20", "color3": "#050200"}), ["#050200", "#ff9a20", "#fff0c0"]),
+        pr("Overdrive", "overdrive", json!({"speed": 0.5}), ["#005aff", "#8000a0", "#ff2800"]),
+        pr("Glacier to Magma", "overdrive", json!({"color": "#00e0ff", "color2": "#ff0060", "speed": 0.5}), ["#00e0ff", "#8040ff", "#ff0060"]),
+        pr("Comet Tail", "trail", json!({"rainbow": true, "trail": 0.6, "speed": 0.5}), ["#00ffd0", "#ff00ff", "#ffe000"]),
+        pr("Pop Art", "flip", json!({"palette": "Candy", "speed": 0.5}), ["#ff78c8", "#ffe678", "#78ffdc"]),
+        pr("Silk Road", "silk", json!({"speed": 0.4}), ["#1428ff", "#a028d0", "#ff2896"]),
+        pr("Champagne", "silk", json!({"color": "#3a2000", "color2": "#ffd28a", "scale": 0.5, "speed": 0.3}), ["#3a2000", "#c09050", "#ffd28a"]),
+        pr("Deep Space", "nebula", json!({"palette": "Vaporwave", "speed": 0.4}), ["#04000c", "#9600ff", "#00c8ff"]),
+        pr("Summer Night", "fireflies", json!({"density": 0.5, "speed": 0.45}), ["#000804", "#203a10", "#c8ff3c"]),
+        pr("Pool Party", "caustics", json!({"speed": 0.45}), ["#00326e", "#2080c0", "#b4ffff"]),
+        pr("Outrun", "synthwave", json!({"speed": 0.45}), ["#10002c", "#ff00c8", "#ffd200"]),
+        pr("Hypnotic", "pendulum", json!({"rainbow": true, "speed": 0.45}), ["#000000", "#ff00ff", "#00ffd0"]),
+        pr("Mercury", "chrome", json!({"speed": 0.4}), ["#101216", "#8c96a8", "#ffffff"]),
+        pr("Molten Gold", "chrome", json!({"color": "#ffb030", "speed": 0.35}), ["#140800", "#a06010", "#ffd080"]),
+        pr("Aurora Sound", "audio_aurora", json!({"sensitivity": 0.45}), ["#00ff8c", "#40a0c0", "#8c00ff"]),
+        pr("Delay Pedal", "echo", json!({"rainbow": true, "feedback": 0.6}), ["#000000", "#00c8ff", "#ff00c8"]),
+        pr("Pinball", "bounce", json!({"rainbow": true, "trail": 0.55}), ["#000000", "#ffc800", "#ff0080"]),
+        pr("Tesla Coil", "lightning", json!({"color": "#a0b4ff", "speed": 0.5}), ["#02020c", "#5060ff", "#e0e8ff"]),
+        pr("Red Storm", "lightning", json!({"color": "#ff3020", "color2": "#0c0000"}), ["#0c0000", "#ff3020", "#ffc0a0"]),
+        pr("Night Synth", "piano", json!({"rainbow": true, "trail": 0.5}), ["#000000", "#ff00a0", "#00e6ff"]),
+        pr("Gallery Wall", "splat", json!({"palette": "Candy", "color2": "#0a0a0a"}), ["#ff78c8", "#ffe678", "#78ffdc"]),
+        pr("Forest Fire", "wildfire", json!({"spread": 0.55}), ["#062000", "#ff6e00", "#ffd228"]),
+        pr("Repulsor", "forcefield", json!({"density": 0.55}), ["#000000", "#2878ff", "#ff3cc8"]),
+        pr("Event Horizon", "blackhole", json!({"color": "#ff7800"}), ["#000000", "#ff7800", "#ffffff"]),
+        pr("Subwoofer", "tunnel", json!({"rainbow": true, "sensitivity": 0.45}), ["#000000", "#ff0078", "#00c8ff"]),
         Preset {
             name: "WASD Gamer",
             effect: "custom",
